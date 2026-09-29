@@ -1,0 +1,7 @@
+# txsize-calc
+
+> Offline Solana transaction size calculator — legacy and v0 byte math vs 1232-byte limit, no RPC.
+
+- Site: https://visawestern.github.io/txsize-calc/
+- Static demo, no backend. Open index.html in a browser.
+- License: see LICENSE. Source: https://github.com/visawestern/txsize-calc

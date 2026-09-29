@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://visawestern.github.io/txsize-calc/sitemap.xml
