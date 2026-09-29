@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solana Tx Size Calculator — offline (Q23875)</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 8px;color:var(--acc)}
+.sub{color:var(--mut);font-size:13px;margin:0 0 14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+.field{display:flex;flex-direction:column;gap:4px;min-width:120px}
+label{font-size:12px;color:var(--mut)}
+input[type=number],select,textarea{background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px;font-size:14px}
+input[type=number]{width:140px}textarea{width:100%;min-height:74px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+button{background:#1f6feb;border:1px solid #1f6feb;color:#fff;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer}
+button.ghost{background:transparent;border-color:var(--line);color:var(--fg)}
+button.danger{background:transparent;border-color:var(--bad);color:var(--bad)}
+button:hover{filter:brightness(1.1)}
+.total{font-size:34px;font-weight:700;margin:4px 0}
+.badge{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700}
+.ok{background:rgba(63,185,80,.15);color:var(--ok);border:1px solid var(--ok)}
+.over{background:rgba(248,81,73,.15);color:var(--bad);border:1px solid var(--bad)}
+.near{background:rgba(210,153,34,.15);color:var(--warn);border:1px solid var(--warn)}
+.bar{height:12px;background:#0d1117;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin:8px 0}
+.bar>i{display:block;height:100%;background:var(--ok)}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:600;font-size:12px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.mono{font-family:ui-monospace,Menlo,monospace}
+.mut{color:var(--mut);font-size:12px}
+ul.tips{margin:6px 0 0 18px;padding:0;font-size:13px}
+.ix{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+.foot{color:var(--mut);font-size:12px;margin-top:18px}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Solana transaction size calculator <span class="mut">— offline, no RPC</span></h1>
+<p class="sub">Answers SSE Q23875 “Get size of the transaction”: <span class="mono">serialize()</span> throws
+<span class="mono">encoding overruns Uint8Array</span> past the ~1232-byte packet limit, so this page
+<strong>counts bytes arithmetically</strong> (signatures + header + keys + blockhash + instructions + ALT lookups +
+<strong>compact-u16</strong> length prefixes) without ever allocating the oversized buffer. 100% local — no keys, no RPC, no CDN.</p>
+
+<div class="card">
+<h2 style="margin-top:0">1 · Message shape</h2>
+<div class="row">
+<div class="field"><label>Version</label>
+<select id="version"><option value="legacy" selected>legacy</option><option value="v0">v0 (with ALT lookups)</option></select></div>
+<div class="field"><label>Signatures (0–64)</label><input id="numSigs" type="number" min="0" max="64" value="1"></div>
+<div class="field"><label>Static account keys (0–256)</label><input id="numKeys" type="number" min="0" max="256" value="3"></div>
+<div class="field"><label>&nbsp;</label><span>
+<button id="presetTransfer" type="button" class="ghost">preset: transfer</button>
+<button id="presetEmpty" type="button" class="ghost">preset: empty</button>
+<button id="presetHeavy" type="button" class="ghost">preset: heavy</button>
+</span></div>
+</div>
+<p class="mut">Fixed per-tx constants: header 3 B · recent blockhash 32 B · version prefix 1 B on v0 only · each signature 64 B.</p>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">2 · Instructions</h2>
+<div id="ixList"></div>
+<button id="addIx" type="button" class="ghost">+ add instruction</button>
+<p class="mut">Per instruction: 1 B programIdIndex + compact-u16(numAccounts) + 1 B per account index + compact-u16(dataLen) + data bytes.</p>
+</div>
+
+<div class="card" id="lookupCard" hidden>
+<h2 style="margin-top:0">3 · Address table lookups (v0 only)</h2>
+<div id="lkList"></div>
+<button id="addLk" type="button" class="ghost">+ add lookup</button>
+<p class="mut">Per lookup: 32 B table key + compact-u16(w) + w + compact-u16(r) + r. Legacy txs cannot carry lookups.</p>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">4 · Result vs 1232-byte limit</h2>
+<div class="total mono" id="total">—</div>
+<div><span class="badge ok" id="badge">—</span> <span class="mut mono" id="vsLine"></span></div>
+<div class="bar"><i id="barFill"></i></div>
+<table><thead><tr><th>Section</th><th class="n">Bytes</th><th>Math</th></tr></thead><tbody id="breakdown"></tbody></table>
+<ul class="tips" id="tips"></ul>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">5 · Quick sizer: pasted base64 transaction</h2>
+<textarea id="b64" placeholder="paste base64-encoded transaction bytes here (stays in this page, never sent anywhere)"></textarea>
+<div class="row" style="margin-top:8px"><button id="sizeB64" type="button">measure base64</button><span class="mut mono" id="b64out"></span></div>
+<p class="mut">Decoded length = len×3/4 − padding. Useful to cross-check the manual count above against a real wire blob.</p>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">6 · compact-u16 — where the overrun hides</h2>
+<table><thead><tr><th>Value range</th><th class="n">Prefix bytes</th><th>Example</th></tr></thead><tbody>
+<tr><td class="mono">0 … 127</td><td class="n mono">1</td><td class="mono">12-byte transfer data → 1 + 12</td></tr>
+<tr><td class="mono">128 … 16383</td><td class="n mono">2</td><td class="mono">128-byte memo data → 2 + 128 (the +1 trap)</td></tr>
+<tr><td class="mono">16384 … 2097151</td><td class="n mono">3</td><td class="mono">practically unreachable in one tx</td></tr>
+</tbody></table>
+<p class="mut">Every vector (signatures, keys, ix count, ix accounts, ix data, lookup lists) carries such a prefix.
+Growing data 127→128 costs <strong>2</strong> bytes, not 1. <span class="mono">serialize()</span> then overruns its
+fixed-size buffer and throws instead of reporting the size — hence this calculator.</p>
+<div class="row"><button id="selfTest" type="button" class="ghost">run in-page self-test (5 vectors)</button><span class="mut mono" id="selfOut"></span></div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">7 · If you are over 1232</h2>
+<ul class="tips">
+<li><strong>Split</strong> into two transactions (most reliable fix for Q23875-style failures).</li>
+<li><strong>Compress with ALT:</strong> move read-only accounts into address table lookups (v0) — each repeated 32 B key becomes a 1 B index.</li>
+<li><strong>Shrink data:</strong> drop memo/logs padding; prefer u8/u16 counts over strings; batch fewer ix per tx.</li>
+<li><strong>Recount prefixes:</strong> after edits re-check every compact-u16 boundary (127/128, counts of keys/ix).</li>
+</ul>
+</div>
+
+<p class="foot">SSE Q23875 “Get size of the transaction” (score 0 / answers 0 / views 55, checked 2026-09-29) ·
+<a href="https://solana.stackexchange.com/questions/23875/get-size-of-the-transaction">question link</a> ·
+limit PACKET_DATA_SIZE = 1232 bytes · file: txsize_calc/index.html + calc.js · fully offline.</p>
+</div>
+<script src="./calc.js"></script>
+<script>
+'use strict';
+/* UI glue only — math lives in calc.js so node tests import the same code. */
+var $ = function(id){ return document.getElementById(id); };
+var ixState = [{na:2, dl:12}];
+var lkState = [];
+
+function num(id, dflt){ var v = parseInt($(id).value, 10); return Number.isInteger(v) ? v : dflt; }
+
+function renderIx(){
+  var box = $('ixList'); box.innerHTML = '';
+  ixState.forEach(function(ix, i){
+    var d = document.createElement('div'); d.className = 'ix';
+    d.innerHTML = '<b>ix#' + i + '</b>' +
+      '<div class="field"><label>accounts</label><input type="number" min="0" max="256" value="' + ix.na + '" data-k="na" data-i="' + i + '"></div>' +
+      '<div class="field"><label>data bytes</label><input type="number" min="0" max="1232" value="' + ix.dl + '" data-k="dl" data-i="' + i + '"></div>' +
+      '<div class="field"><label>&nbsp;</label><button type="button" class="danger" data-del="' + i + '">remove</button></div>';
+    box.appendChild(d);
+  });
+  box.querySelectorAll('input').forEach(function(inp){
+    inp.addEventListener('input', function(){
+      var i = +inp.getAttribute('data-i'), k = inp.getAttribute('data-k');
+      var v = parseInt(inp.value, 10); if (!Number.isInteger(v) || v < 0) return;
+      ixState[i][k === 'na' ? 'na' : 'dl'] = v; recalc();
+    });
+  });
+  box.querySelectorAll('[data-del]').forEach(function(b){
+    b.addEventListener('click', function(){ ixState.splice(+b.getAttribute('data-del'), 1); if (!ixState.length) ixState.push({na:0,dl:0}); renderIx(); recalc(); });
+  });
+}
+function renderLk(){
+  var box = $('lkList'); box.innerHTML = '';
+  lkState.forEach(function(lk, i){
+    var d = document.createElement('div'); d.className = 'ix';
+    d.innerHTML = '<b>lookup#' + i + '</b>' +
+      '<div class="field"><label>writable idx</label><input type="number" min="0" max="256" value="' + lk.w + '" data-k="w" data-i="' + i + '"></div>' +
+      '<div class="field"><label>readonly idx</label><input type="number" min="0" max="256" value="' + lk.r + '" data-k="r" data-i="' + i + '"></div>' +
+      '<div class="field"><label>&nbsp;</label><button type="button" class="danger" data-del="' + i + '">remove</button></div>';
+    box.appendChild(d);
+  });
+  box.querySelectorAll('input').forEach(function(inp){
+    inp.addEventListener('input', function(){
+      var i = +inp.getAttribute('data-i'), k = inp.getAttribute('data-k');
+      var v = parseInt(inp.value, 10); if (!Number.isInteger(v) || v < 0) return;
+      lkState[i][k] = v; recalc();
+    });
+  });
+  box.querySelectorAll('[data-del]').forEach(function(b){
+    b.addEventListener('click', function(){ lkState.splice(+b.getAttribute('data-del'), 1); renderLk(); recalc(); });
+  });
+}
+
+function recalc(){
+  var version = $('version').value;
+  $('lookupCard').hidden = version !== 'v0';
+  var p = {
+    version: version,
+    numSigs: num('numSigs', 1),
+    numKeys: num('numKeys', 3),
+    instructions: ixState.map(function(x){ return { numAccounts: x.na, dataLen: x.dl }; }),
+    lookups: version === 'v0' ? lkState.map(function(x){ return { writable: x.w, readonly: x.r }; }) : []
+  };
+  var r, err = null;
+  try { r = calcTx(p); } catch (e) { err = e; }
+  if (err) {
+    $('total').textContent = 'input error';
+    $('badge').textContent = 'ERROR'; $('badge').className = 'badge over';
+    $('vsLine').textContent = String((err && err.message) || err);
+    $('breakdown').innerHTML = ''; $('tips').innerHTML = ''; $('barFill').style.width = '0%';
+    return;
+  }
+  $('total').textContent = r.total + ' bytes';
+  var b = $('badge');
+  if (!r.fits) { b.textContent = 'OVER by ' + r.overBy + ' B'; b.className = 'badge over'; }
+  else if (r.total >= r.limit - 64) { b.textContent = 'NEAR LIMIT (' + (r.limit - r.total) + ' B left)'; b.className = 'badge near'; }
+  else { b.textContent = 'FITS (' + (r.limit - r.total) + ' B left)'; b.className = 'badge ok'; }
+  $('vsLine').textContent = 'message ' + r.messageBytes + ' B + signatures ' + r.sigBytes + ' B · limit ' + r.limit;
+  var pct = Math.min(100, Math.round(r.total / r.limit * 100));
+  var fill = $('barFill'); fill.style.width = pct + '%';
+  fill.style.background = !r.fits ? 'var(--bad)' : (r.total >= r.limit - 64 ? 'var(--warn)' : 'var(--ok)');
+  function row(k, v, m){ return '<tr><td>' + k + '</td><td class="n mono">' + v + '</td><td class="mono mut">' + m + '</td></tr>'; }
+  var h = '';
+  h += row('signatures', r.sigBytes, r.sigPrefix + 'B prefix + ' + p.numSigs + '×64');
+  if (r.versionBytes) h += row('version prefix (v0)', 1, '0x80');
+  h += row('header', 3, '3×u8');
+  h += row('account keys', r.keysBytes, r.keysPrefix + 'B prefix + ' + p.numKeys + '×32');
+  h += row('recent blockhash', 32, '32 B');
+  h += row('ix count prefix', r.ixCountPrefix, p.instructions.length + ' ix');
+  r.ixRows.forEach(function(ix, i){ h += row('ix#' + i, ix.bytes, '1 + ' + ix.acctPrefix + '+' + ix.numAccounts + ' + ' + ix.dataPrefix + '+' + ix.dataLen); });
+  if (r.version === 'v0') {
+    h += row('lookup count', r.lookupCountPrefix, lkState.length + ' lookups');
+    r.lookupRows.forEach(function(l, i){ h += row('lookup#' + i, l.bytes, '32 + ' + l.wPrefix + '+' + l.writable + ' + ' + l.rPrefix + '+' + l.readonly); });
+  }
+  h += row('<b>message</b>', '<b>' + r.messageBytes + '</b>', 'sum above');
+  h += row('<b>total on wire</b>', '<b>' + r.total + '</b>', 'sigs + message');
+  $('breakdown').innerHTML = h;
+  var tips = [];
+  if (!r.fits) {
+    tips.push('<li><strong>Over by ' + r.overBy + ' B.</strong> Split into 2 txs or move read-only keys into an ALT (v0) — each repeated key saves 31 B.</li>');
+    tips.push('<li>Cut the biggest data payload first; remember 127→128 data costs an extra prefix byte.</li>');
+  } else if (r.total >= r.limit - 64) {
+    tips.push('<li>Close to the limit: keep ' + (r.limit - r.total) + ' B of headroom — one more account (+1 B index, or +32 B new key) can tip it over.</li>');
+  } else {
+    tips.push('<li>Comfortably inside the limit. Headroom: ' + (r.limit - r.total) + ' B.</li>');
+  }
+  $('tips').innerHTML = tips.join('');
+}
+
+$('version').addEventListener('change', recalc);
+$('numSigs').addEventListener('input', recalc);
+$('numKeys').addEventListener('input', recalc);
+$('addIx').addEventListener('click', function(){ ixState.push({na:2, dl:12}); renderIx(); recalc(); });
+$('addLk').addEventListener('click', function(){ lkState.push({w:2, r:1}); renderLk(); recalc(); });
+$('presetTransfer').addEventListener('click', function(){ $('version').value='legacy'; $('numSigs').value=1; $('numKeys').value=3; ixState=[{na:2,dl:12}]; lkState=[]; renderIx(); renderLk(); recalc(); });
+$('presetEmpty').addEventListener('click', function(){ $('version').value='legacy'; $('numSigs').value=1; $('numKeys').value=1; ixState=[{na:0,dl:0}]; lkState=[]; renderIx(); renderLk(); recalc(); });
+$('presetHeavy').addEventListener('click', function(){ $('version').value='legacy'; $('numSigs').value=1; $('numKeys').value=10; ixState=[{na:5,dl:200},{na:5,dl:200},{na:5,dl:200},{na:5,dl:200},{na:5,dl:200}]; lkState=[]; renderIx(); renderLk(); recalc(); });
+$('sizeB64').addEventListener('click', function(){
+  try {
+    var n = base64DecodedLen($('b64').value);
+    $('b64out').textContent = n + ' bytes decoded' + (n > 1232 ? ' — OVER by ' + (n - 1232) : ' — fits (' + (1232 - n) + ' left)');
+  } catch (e) { $('b64out').textContent = 'error: ' + e.message; }
+});
+$('selfTest').addEventListener('click', function(){
+  try {
+    var t1 = calcTx({version:'legacy', numSigs:1, numKeys:3, instructions:[{numAccounts:2, dataLen:12}], lookups:[]});
+    var t2 = calcTx({version:'legacy', numSigs:1, numKeys:1, instructions:[{numAccounts:0, dataLen:0}], lookups:[]});
+    var a = calcTx({version:'legacy', numSigs:1, numKeys:3, instructions:[{numAccounts:2, dataLen:127}], lookups:[]});
+    var bb = calcTx({version:'legacy', numSigs:1, numKeys:3, instructions:[{numAccounts:2, dataLen:128}], lookups:[]});
+    var ok = (t1.total === 215) && (t2.total === 137) && (bb.total - a.total === 2);
+    $('selfOut').textContent = ok ? 'PASS transfer=215 empty1ix=137 edge127->128=+2' : 'FAIL ' + t1.total + '/' + t2.total + '/' + (bb.total - a.total);
+  } catch (e) { $('selfOut').textContent = 'error: ' + e.message; }
+});
+
+renderIx(); renderLk(); recalc();
+</script>
+</body>
+</html>
